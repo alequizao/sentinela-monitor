@@ -32,8 +32,14 @@ cURL e arquivos JSON.
 | Teto diário | Máximo de 8 Direct por dia; estourando, só log |
 | Relatório das 23:50 | 1 Direct/dia com disponibilidade, tempo fora e incidentes |
 
-**Painel (v1.4)** — filtro por data, linha do tempo de 24h, comparativo de 7/30/90 dias,
+**Painel (v1.5)** — filtro por data, linha do tempo de 24h, comparativo de 7/30/90 dias,
 causa raiz por incidente, busca, exportação CSV/JSON e Web Push nativo (VAPID + aes128gcm).
+
+Trocar de dia, de período ou buscar acontece **por AJAX**: barra de progresso no topo, o
+conteúdo antigo esmaecido (em vez de piscar para branco), transição de entrada e a URL
+atualizada via `history.pushState` — o botão voltar do navegador continua funcionando. Os
+fragmentos vêm prontos do PHP, então a **mesma função** renderiza o load inicial e a troca.
+Sem JavaScript, o `<form>` envia por GET e a página funciona igual.
 
 ---
 

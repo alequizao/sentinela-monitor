@@ -11,6 +11,8 @@ declare(strict_types=1);
  *
  * v1.3: filtro por data, linha do tempo de 24h, comparativo de período,
  * exportação CSV/JSON e busca nos incidentes.
+ * v1.5: navegação do filtro por AJAX, com barra de progresso, dimming do
+ * conteúdo e transição — sem recarregar a página.
  * v1.4: causa raiz por incidente — camada (origem x Cloudflare), CF-Ray e o
  * resultado da sonda direta na origem, gravados pelo monitor.php.
  *
@@ -24,7 +26,7 @@ declare(strict_types=1);
 
 date_default_timezone_set('America/Maceio');
 
-const VERSAO     = '1.4.0';
+const VERSAO     = '1.5.0';
 const ESTADO_ARQ = __DIR__ . '/estado.json';
 const HIST_DIR   = __DIR__ . '/historico';
 const SUBS_ARQ   = __DIR__ . '/push_subs.json';   // inscrições Web Push (bloqueado na web)
@@ -315,13 +317,20 @@ $busca = trim((string) ($_GET['q'] ?? ''));
 $D = dia($sel);
 
 /* Vizinhos para as setas ← → : só dias que realmente têm dado. */
-$disponiveis = dias_arquivados();
-if (!in_array($hoje_str, $disponiveis, true)) { $disponiveis[] = $hoje_str; }
-sort($disponiveis);
-$pos      = array_search($sel, $disponiveis, true);
-$anterior = ($pos !== false && $pos > 0) ? $disponiveis[$pos - 1] : '';
-$proximo  = ($pos !== false && $pos < count($disponiveis) - 1) ? $disponiveis[$pos + 1] : '';
-$primeiro = $disponiveis ? $disponiveis[0] : $hoje_str;
+function vizinhos(string $sel): array
+{
+    $hoje_str = date('Y-m-d');
+    $disp = dias_arquivados();
+    if (!in_array($hoje_str, $disp, true)) { $disp[] = $hoje_str; }
+    sort($disp);
+    $pos = array_search($sel, $disp, true);
+    return [
+        ($pos !== false && $pos > 0) ? $disp[$pos - 1] : '',
+        ($pos !== false && $pos < count($disp) - 1) ? $disp[$pos + 1] : '',
+        $disp ? $disp[0] : $hoje_str,
+    ];
+}
+list($anterior, $proximo, $primeiro) = vizinhos($sel);
 
 /* Incidentes já filtrados pela busca e do mais recente para o mais antigo. */
 function incidentes_visiveis(array $d, string $busca): array
@@ -541,6 +550,31 @@ function render_incidentes(array $m, string $busca = ''): string
     return $out;
 }
 
+/* Rótulo do dia selecionado e setas de navegação — recalculados também no
+ * AJAX, senão a barra de filtro ficaria falando do dia anterior. */
+function render_rotulo(string $sel, array $D): string
+{
+    return '<i class="fa-regular fa-calendar" style="color:var(--cor-primaria)"></i> '
+         . h(data_br($sel))
+         . ($D['estimado']
+             ? '<span class="tag" title="Reconstruído a partir do log do monitor">estimado</span>' : '');
+}
+
+function render_nav(string $sel, int $periodo): string
+{
+    list($ant, $prox) = vizinhos($sel);
+    $hoje_str = date('Y-m-d');
+    $seta = function ($data, $titulo, $icone) use ($periodo) {
+        return $data !== ''
+            ? '<a href="?d=' . $data . '&p=' . $periodo . '" title="' . $titulo . '">'
+              . '<i class="fa-solid ' . $icone . '"></i></a>'
+            : '<span><i class="fa-solid ' . $icone . '"></i></span>';
+    };
+    return $seta($ant, 'Dia anterior', 'fa-chevron-left')
+         . '<a href="?d=' . $hoje_str . '&p=' . $periodo . '" title="Hoje">Hoje</a>'
+         . $seta($prox, 'Próximo dia', 'fa-chevron-right');
+}
+
 /* Causa raiz do incidente: o que a evidência gravada pelo monitor permite
  * afirmar. Incidentes anteriores à v1.4 não têm evidência — e aí a linha
  * simplesmente não aparece, em vez de inventar um diagnóstico. */
@@ -657,6 +691,16 @@ if (isset($_GET['ajax'])) {
         'timeline'   => render_timeline($D),
         'incidentes' => render_incidentes($D, $busca),
         'atualizado' => date('H:i:s'),
+        /* --- navegação por AJAX (v1.5) --- */
+        'sel'        => $sel,
+        'p'          => $periodo,
+        'q'          => $busca,
+        'aovivo'     => $D['hoje'],
+        'rotulo'     => render_rotulo($sel, $D),
+        'nav'        => render_nav($sel, $periodo),
+        'periodo'    => render_periodo(serie($periodo), $sel, $periodo),
+        'titulo_inc' => $D['hoje'] ? 'de hoje' : ('do dia ' . date('d/m', strtotime($sel))),
+        'titulo_per' => 'Últimos ' . $periodo . ' dias',
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -818,16 +862,42 @@ h3.sec .acoes{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
 .btn-outline-soft:hover{border-color:var(--cor-primaria);color:var(--cor-primaria)}
 .flash{margin:0 0 16px;padding:11px 15px;border-radius:var(--raio);font-size:.84rem;font-weight:500}
 .flash.ok{background:var(--ok-bg);color:var(--ok)} .flash.erro{background:var(--down-bg);color:var(--down)}
+/* ---- feedback visual do AJAX ---- */
+.progresso{position:fixed;top:0;left:0;height:3px;width:100%;z-index:9999;
+  background:linear-gradient(90deg,var(--cor-primaria),#60A5FA);transform-origin:0 50%;
+  transform:scaleX(0);transition:transform .25s ease}
+.progresso.andando{animation:barra 1.1s ease-in-out infinite}
+@keyframes barra{0%{transform:scaleX(0)}50%{transform:scaleX(.7)}100%{transform:scaleX(1);opacity:.25}}
+/* Dimming leve: mostra que o conteúdo é o ANTIGO, sem escondê-lo (piscar para
+   branco é pior que esperar 200ms vendo o dado anterior). */
+.trocavel{transition:opacity .18s ease,filter .18s ease}
+body.carregando .trocavel{opacity:.4;filter:saturate(.5);pointer-events:none}
+body.carregando .filtro{cursor:progress}
+.entrando{animation:entra .28s ease}
+@keyframes entra{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.spin{width:15px;height:15px;border-radius:50%;border:2px solid var(--cor-borda);
+  border-top-color:var(--cor-primaria);animation:gira .7s linear infinite;flex:0 0 15px}
+.spin[hidden]{display:none}
+@keyframes gira{to{transform:rotate(360deg)}}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.filtro.erro{outline:2px solid var(--down);outline-offset:2px}
 @media(max-width:880px){.wrap{padding:18px 13px}.topo h1{font-size:1.2rem}
   .estado{gap:13px;padding:18px}.stat .num{font-size:1.45rem}
   .filtro input[type=search]{width:100%}.rotulo-dia{width:100%;margin-bottom:2px}
   .tl-h span{font-size:.5rem}}
-@media(prefers-reduced-motion:reduce){.ao-vivo .pulse{animation:none}}
+@media(prefers-reduced-motion:reduce){.ao-vivo .pulse{animation:none}
+  .progresso.andando,.spin{animation:none}.entrando{animation:none}
+  .progresso.andando{transform:scaleX(.6)}}
 @media print{.filtro,.topo .btn-push,.topo .btn-outline-soft,h3.sec .acoes{display:none}
   body{background:#fff}.card-soft,.estado{box-shadow:none;border:1px solid #DDD}}
 </style>
 </head>
 <body>
+<!-- Feedback do AJAX: barra de progresso no topo (como a de navegador) e um
+     aviso invisível para leitor de tela — dimming sozinho não comunica nada
+     a quem não enxerga a tela. -->
+<div id="progresso" class="progresso" hidden></div>
+<p id="leitor" class="sr" role="status" aria-live="polite"></p>
 <div class="wrap">
 
   <div class="topo">
@@ -842,8 +912,8 @@ h3.sec .acoes{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
       <button id="btn-teste" class="btn-outline-soft" type="button" hidden>
         <i class="fa-solid fa-paper-plane"></i> Testar
       </button>
-      <span class="ao-vivo<?= $D['hoje'] ? '' : ' hist' ?>"><span class="pulse"></span>
-        <?= $D['hoje'] ? 'ao vivo' : 'histórico' ?>
+      <span class="ao-vivo<?= $D['hoje'] ? '' : ' hist' ?>" id="selo-vivo"><span class="pulse"></span>
+        <span id="selo-txt"><?= $D['hoje'] ? 'ao vivo' : 'histórico' ?></span>
         <span id="hora" style="color:var(--cor-texto-sec);font-weight:400"></span></span>
     </div>
   </div>
@@ -852,20 +922,12 @@ h3.sec .acoes{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
 
   <!-- ===== FILTRO POR DATA ===== -->
   <form class="filtro" method="get" id="form-filtro">
-    <span class="rotulo-dia"><i class="fa-regular fa-calendar" style="color:var(--cor-primaria)"></i>
-      <?= h(data_br($sel)) ?>
-      <?php if ($D['estimado']): ?><span class="tag" title="Reconstruído a partir do log do monitor">estimado</span><?php endif; ?>
-    </span>
+    <span class="rotulo-dia" id="rotulo"><?= render_rotulo($sel, $D) ?></span>
 
-    <span class="nav-dia">
-      <?php if ($anterior !== ''): ?>
-        <a href="?d=<?= $anterior ?>&p=<?= $periodo ?>" title="Dia anterior"><i class="fa-solid fa-chevron-left"></i></a>
-      <?php else: ?><span><i class="fa-solid fa-chevron-left"></i></span><?php endif; ?>
-      <a href="?d=<?= $hoje_str ?>&p=<?= $periodo ?>">Hoje</a>
-      <?php if ($proximo !== ''): ?>
-        <a href="?d=<?= $proximo ?>&p=<?= $periodo ?>" title="Próximo dia"><i class="fa-solid fa-chevron-right"></i></a>
-      <?php else: ?><span><i class="fa-solid fa-chevron-right"></i></span><?php endif; ?>
-    </span>
+    <span class="nav-dia" id="nav"><?= render_nav($sel, $periodo) ?></span>
+
+    <!-- Spinner do AJAX: sai do fluxo quando oculto, para a barra não "pular". -->
+    <span class="spin" id="spin" hidden aria-hidden="true"></span>
 
     <span class="grupo">
       <label for="d">Data</label>
@@ -889,31 +951,34 @@ h3.sec .acoes{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
     <noscript><button class="btn-outline-soft btn-mini" type="submit">Filtrar</button></noscript>
   </form>
 
-  <div id="estado"><?= render_status($D) ?></div>
+  <div id="estado" class="trocavel"><?= render_status($D) ?></div>
 
-  <div class="row g-3" id="cards"><?= render_cards($D) ?></div>
+  <div class="row g-3 trocavel" id="cards"><?= render_cards($D) ?></div>
 
   <h3 class="sec"><i class="fa-solid fa-timeline"></i> Linha do tempo · 24h</h3>
-  <div class="card-soft" id="timeline"><?= render_timeline($D) ?></div>
+  <div class="card-soft trocavel" id="timeline"><?= render_timeline($D) ?></div>
 
   <h3 class="sec"><i class="fa-solid fa-clock-rotate-left"></i>
-    Incidentes <?= $D['hoje'] ? 'de hoje' : 'do dia ' . h(date('d/m', strtotime($sel))) ?>
+    Incidentes <span id="titulo-inc"><?= $D['hoje'] ? 'de hoje' : 'do dia ' . h(date('d/m', strtotime($sel))) ?></span>
     <span class="acoes">
-      <a class="btn-outline-soft btn-mini" href="?d=<?= $sel ?>&q=<?= urlencode($busca) ?>&export=csv">
+      <a class="btn-outline-soft btn-mini" id="exp-csv"
+         href="?d=<?= $sel ?>&q=<?= urlencode($busca) ?>&export=csv">
         <i class="fa-solid fa-file-csv"></i> CSV do dia</a>
-      <a class="btn-outline-soft btn-mini" href="?d=<?= $sel ?>&q=<?= urlencode($busca) ?>&export=json">
+      <a class="btn-outline-soft btn-mini" id="exp-json"
+         href="?d=<?= $sel ?>&q=<?= urlencode($busca) ?>&export=json">
         <i class="fa-solid fa-code"></i> JSON</a>
     </span>
   </h3>
-  <div class="card-soft" id="incidentes"><?= render_incidentes($D, $busca) ?></div>
+  <div class="card-soft trocavel" id="incidentes"><?= render_incidentes($D, $busca) ?></div>
 
-  <h3 class="sec"><i class="fa-solid fa-chart-column"></i> Últimos <?= $periodo ?> dias
+  <h3 class="sec"><i class="fa-solid fa-chart-column"></i>
+    <span id="titulo-per">Últimos <?= $periodo ?> dias</span>
     <span class="acoes">
-      <a class="btn-outline-soft btn-mini" href="?p=<?= $periodo ?>&escopo=periodo&export=csv">
+      <a class="btn-outline-soft btn-mini" id="exp-per" href="?p=<?= $periodo ?>&escopo=periodo&export=csv">
         <i class="fa-solid fa-file-csv"></i> CSV do período</a>
     </span>
   </h3>
-  <div class="card-soft"><?= render_periodo($serie_periodo, $sel, $periodo) ?></div>
+  <div class="card-soft trocavel" id="periodo"><?= render_periodo($serie_periodo, $sel, $periodo) ?></div>
 
   <div class="rodape">
     Alertas e relatório diário via Direct do Instagram ·
@@ -924,59 +989,169 @@ h3.sec .acoes{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
 </div>
 
 <script>
-/* Tempo real: polling 5s SÓ no dia de hoje (dias fechados não mudam mais).
-   A render vem pronta do PHP (mesma função do load inicial) — troca só se mudou. */
+/* ============ ESTADO DA TELA + NAVEGAÇÃO POR AJAX (v1.5) ============
+   Trocar de dia, de período ou buscar NÃO recarrega mais a página: busca os
+   fragmentos já renderizados pelo PHP e substitui só o que mudou, com barra de
+   progresso, dimming do conteúdo antigo e URL atualizada (history) — o botão
+   voltar do navegador continua funcionando. O <form> segue válido: sem JS ele
+   envia por GET normalmente. */
 const VERSAO_CLIENTE = '<?= VERSAO ?>';
-const AO_VIVO = <?= $D['hoje'] ? 'true' : 'false' ?>;
-const BUSCA = <?= json_encode($busca) ?>;
+const HOJE = '<?= $hoje_str ?>';
+let filtro = {d: '<?= h($sel) ?>', p: '<?= $periodo ?>', q: <?= json_encode($busca) ?>};
+let aoVivo = <?= $D['hoje'] ? 'true' : 'false' ?>;
 let assinatura = '';
+let carregando = false;
+let pedido = 0;                      // descarta resposta de requisição vencida
 
-async function atualizar() {
-  if (!AO_VIVO || document.hidden) return;
+const $ = (id) => document.getElementById(id);
+const barra = $('progresso'), spin = $('spin'), leitor = $('leitor');
+
+function mostrarCarga(ativo) {
+  carregando = ativo;
+  document.body.classList.toggle('carregando', ativo);
+  spin.hidden = !ativo;
+  if (ativo) {
+    barra.hidden = false;
+    barra.classList.add('andando');
+  } else {
+    barra.classList.remove('andando');
+    barra.hidden = true;
+  }
+}
+
+function trocar(el, html) {
+  if (!el || el.innerHTML === html) return false;
+  el.innerHTML = html;
+  el.classList.remove('entrando');
+  void el.offsetWidth;               // reinicia a animação
+  el.classList.add('entrando');
+  return true;
+}
+
+function aplicar(d, completo) {
+  trocar($('estado'), d.estado);
+  trocar($('cards'), d.cards);
+  trocar($('timeline'), d.timeline);
+  trocar($('incidentes'), d.incidentes);
+  if (completo) {
+    trocar($('periodo'), d.periodo);
+    $('rotulo').innerHTML = d.rotulo;
+    $('nav').innerHTML = d.nav;
+    $('titulo-inc').textContent = d.titulo_inc;
+    $('titulo-per').textContent = d.titulo_per;
+    const qs = 'd=' + encodeURIComponent(d.sel) + '&q=' + encodeURIComponent(d.q);
+    $('exp-csv').href = '?' + qs + '&export=csv';
+    $('exp-json').href = '?' + qs + '&export=json';
+    $('exp-per').href = '?p=' + d.p + '&escopo=periodo&export=csv';
+    aoVivo = !!d.aovivo;
+    $('selo-vivo').classList.toggle('hist', !aoVivo);
+    $('selo-txt').textContent = aoVivo ? 'ao vivo' : 'histórico';
+  }
+  $('hora').textContent = aoVivo ? '· ' + d.atualizado : '';
+}
+
+async function buscar(completo) {
+  const meu = ++pedido;
+  const url = '?ajax=1&v=' + encodeURIComponent(VERSAO_CLIENTE)
+            + '&d=' + encodeURIComponent(filtro.d)
+            + '&p=' + encodeURIComponent(filtro.p)
+            + '&q=' + encodeURIComponent(filtro.q);
+  const r = await fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}, cache: 'no-store'});
+  const d = await r.json();
+  if (meu !== pedido) return null;   // chegou tarde: já tem pedido mais novo
+  if (!d.ok) throw new Error('resposta inválida');
+  // Painel atualizado no servidor: recarrega para pegar o novo HTML/JS/CSS.
+  if (d.versao && d.versao !== VERSAO_CLIENTE) { location.reload(true); return null; }
+  aplicar(d, completo);
+  return d;
+}
+
+/* Navegação (data, período, busca, clique numa barra do gráfico). */
+async function navegar(novos, empilhar) {
+  Object.assign(filtro, novos);
+  mostrarCarga(true);
+  form.classList.remove('erro');
+  leitor.textContent = 'Carregando…';
   try {
-    const r = await fetch('?ajax=1&v=' + encodeURIComponent(VERSAO_CLIENTE)
-                          + '&q=' + encodeURIComponent(BUSCA),
-                          {headers: {'X-Requested-With': 'XMLHttpRequest'}, cache: 'no-store'});
-    const d = await r.json();
-    if (!d.ok) return;
-    // Painel atualizado no servidor: recarrega para pegar o novo HTML/JS/CSS.
-    if (d.versao && d.versao !== VERSAO_CLIENTE) { location.reload(true); return; }
-    const nova = d.estado + d.cards + d.incidentes + d.timeline;
-    if (nova !== assinatura) {                 // evita "piscar" sem mudança
-      assinatura = nova;
-      document.getElementById('estado').innerHTML = d.estado;
-      document.getElementById('cards').innerHTML = d.cards;
-      document.getElementById('timeline').innerHTML = d.timeline;
-      document.getElementById('incidentes').innerHTML = d.incidentes;
+    const d = await buscar(true);
+    if (!d) return;
+    if (empilhar !== false) {
+      const qs = '?d=' + encodeURIComponent(filtro.d) + '&p=' + filtro.p
+               + (filtro.q ? '&q=' + encodeURIComponent(filtro.q) : '');
+      history.pushState({...filtro}, '', qs);
     }
-    document.getElementById('hora').textContent = '· ' + d.atualizado;
+    assinatura = d.estado + d.cards + d.incidentes + d.timeline;
+    leitor.textContent = d.titulo_inc + ' carregado.';
+  } catch (e) {
+    // Falhou: o conteúdo antigo continua legível e a barra sinaliza o erro.
+    form.classList.add('erro');
+    aviso('Não consegui carregar esse período. Tente de novo.', 'erro');
+    leitor.textContent = 'Falha ao carregar.';
+  } finally {
+    mostrarCarga(false);
+  }
+}
+
+/* Polling do dia de hoje: silencioso, sem barra de progresso nem dimming. */
+async function atualizar() {
+  if (!aoVivo || document.hidden || carregando) return;
+  try {
+    const d = await buscar(false);
+    if (!d) return;
+    const nova = d.estado + d.cards + d.incidentes + d.timeline;
+    assinatura = nova;                // aplicar() já evita troca sem mudança
   } catch (e) { /* silencioso: falha de rede não quebra a tela */ }
 }
 
-if (AO_VIVO) {
-  setInterval(atualizar, 5000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) atualizar(); });
-  atualizar();
-}
+setInterval(atualizar, 5000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) atualizar(); });
 
-/* ---- filtro: envia sozinho ao mudar data/período; busca com respiro ---- */
-const form = document.getElementById('form-filtro');
-form.querySelector('#d').addEventListener('change', () => form.submit());
-form.querySelector('#p').addEventListener('change', () => form.submit());
+/* ---- ligações da interface ---- */
+const form = $('form-filtro');
+form.addEventListener('submit', (ev) => { ev.preventDefault(); navegar({}); });
+form.querySelector('#d').addEventListener('change', (ev) => navegar({d: ev.target.value}));
+form.querySelector('#p').addEventListener('change', (ev) => navegar({p: ev.target.value}));
+
 let td = null;
-form.querySelector('input[type=search]').addEventListener('input', () => {
+form.querySelector('input[type=search]').addEventListener('input', (ev) => {
   clearTimeout(td);
-  td = setTimeout(() => form.submit(), 600);
+  const v = ev.target.value;
+  td = setTimeout(() => navegar({q: v}), 450);
 });
 
-/* ---- atalhos de teclado: ← → navegam dias, H volta para hoje ---- */
-document.addEventListener('keydown', (ev) => {
-  if (ev.target.matches('input, select, textarea')) return;
-  const ir = (sel) => { const a = document.querySelector(sel); if (a) a.click(); };
-  if (ev.key === 'ArrowLeft')  ir('.nav-dia a[title="Dia anterior"]');
-  if (ev.key === 'ArrowRight') ir('.nav-dia a[title="Próximo dia"]');
-  if (ev.key.toLowerCase() === 'h') ir('.nav-dia a:not([title])');
+/* Setas do filtro e barras do gráfico são links reais (funcionam sem JS);
+   aqui só interceptamos o clique. Delegação, porque o HTML é re-renderizado. */
+document.addEventListener('click', (ev) => {
+  const a = ev.target.closest('#nav a, #periodo a.bar');
+  if (!a || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button !== 0) return;
+  ev.preventDefault();
+  const u = new URL(a.getAttribute('href'), location.href);
+  navegar({d: u.searchParams.get('d') || HOJE,
+           p: u.searchParams.get('p') || filtro.p});
 });
+
+/* Voltar/avançar do navegador. */
+window.addEventListener('popstate', (ev) => {
+  const e = ev.state || {};
+  const u = new URLSearchParams(location.search);
+  filtro = {d: e.d || u.get('d') || HOJE, p: e.p || u.get('p') || 30, q: e.q || u.get('q') || ''};
+  form.querySelector('#d').value = filtro.d;
+  form.querySelector('#p').value = filtro.p;
+  form.querySelector('input[type=search]').value = filtro.q;
+  navegar({}, false);
+});
+
+/* Atalhos: ← → navegam dias, H volta para hoje. */
+document.addEventListener('keydown', (ev) => {
+  if (ev.target.matches('input, select, textarea') || carregando) return;
+  const ir = (sel) => { const a = document.querySelector(sel); if (a) a.click(); };
+  if (ev.key === 'ArrowLeft')  ir('#nav a[title="Dia anterior"]');
+  if (ev.key === 'ArrowRight') ir('#nav a[title="Próximo dia"]');
+  if (ev.key.toLowerCase() === 'h') ir('#nav a[title="Hoje"]');
+});
+
+history.replaceState({...filtro}, '');
+atualizar();
 
 /* ===================== WEB PUSH ===================== */
 const btnPush = document.getElementById('btn-push');
