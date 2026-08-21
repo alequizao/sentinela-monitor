@@ -11,6 +11,8 @@ declare(strict_types=1);
  *
  * v1.3: filtro por data, linha do tempo de 24h, comparativo de período,
  * exportação CSV/JSON e busca nos incidentes.
+ * v1.4: causa raiz por incidente — camada (origem x Cloudflare), CF-Ray e o
+ * resultado da sonda direta na origem, gravados pelo monitor.php.
  *
  * Padrão Designi Alequizao: flat, cards brancos arredondados, fundo cinza claro,
  * destaque azul, Inter. O dia de HOJE atualiza sozinho via fetch+JSON (polling 5s,
@@ -22,7 +24,7 @@ declare(strict_types=1);
 
 date_default_timezone_set('America/Maceio');
 
-const VERSAO     = '1.3.0';
+const VERSAO     = '1.4.0';
 const ESTADO_ARQ = __DIR__ . '/estado.json';
 const HIST_DIR   = __DIR__ . '/historico';
 const SUBS_ARQ   = __DIR__ . '/push_subs.json';   // inscrições Web Push (bloqueado na web)
@@ -205,7 +207,7 @@ function dia(string $data): array
         'data' => $data, 'hoje' => ($data === $hoje), 'existe' => false, 'estimado' => false,
         'checagens' => 0, 'falhas' => 0, 'blips' => 0, 'avisos' => 0,
         'seg_fora' => 0, 'seg_dia' => 86400, 'disp' => 100.0,
-        'incidentes' => [], 'status' => 'desconhecido', 'detalhe' => '—',
+        'incidentes' => [], 'status' => 'desconhecido', 'detalhe' => '—', 'evidencia' => [],
         'desde' => 0, 'ha' => 0, 'atraso' => 0, 'checado' => 0, 'parado' => false,
     ];
 
@@ -238,6 +240,7 @@ function dia(string $data): array
             'desde'      => $desde,
             'ha'         => $desde > 0 ? $ts - $desde : 0,
             'detalhe'    => mascarar((string) ($e['detalhe'] ?? '—')),
+            'evidencia'  => (array) ($e['evidencia'] ?? []),
         ]);
     }
 
@@ -372,6 +375,10 @@ if (isset($_GET['export'])) {
                 'segundos'  => (int) ($i['seg'] ?? 0),
                 'duracao'   => $fim ? dur((int) ($i['seg'] ?? 0)) : 'em andamento',
                 'motivo'    => mascarar((string) ($i['motivo'] ?? '')),
+                'camada'    => (string) (($i['evidencia']['camada'] ?? '') ?: ''),
+                'http'      => (string) (($i['evidencia']['code'] ?? '') ?: ''),
+                'cf_ray'    => (string) (($i['evidencia']['cf_ray'] ?? '') ?: ''),
+                'sonda_origem' => (string) (($i['evidencia']['origem_texto'] ?? '') ?: ''),
             ];
         }
     }
@@ -428,10 +435,13 @@ function render_status(array $m): string
             : 'Aguardando primeira checagem';
     }
 
+    $causa = ($m['status'] === 'down') ? render_causa((array) ($m['evidencia'] ?? [])) : '';
+
     return '<div class="estado ' . $classe . '">'
          . '<div class="estado-ico"><i class="fa-solid ' . $icone . '"></i></div>'
          . '<div class="estado-txt"><h2>' . $rotulo . '</h2><p>' . h($sub) . '</p>'
-         . '<span class="detalhe">' . h($m['detalhe']) . '</span></div></div>';
+         . '<span class="detalhe">' . h($m['detalhe']) . '</span>' . $causa
+         . '</div></div>';
 }
 
 function render_cards(array $m): string
@@ -525,9 +535,42 @@ function render_incidentes(array $m, string $busca = ''): string
               . '<span class="inc-id">' . h(inc_id($ini)) . '</span>'
               . (!empty($i['aberto_na_virada']) ? '<span class="inc-id">cruzou a meia-noite</span>' : '')
               . '<p>' . h(mascarar((string) ($i['motivo'] ?? ''))) . '</p>'
+              . render_causa((array) ($i['evidencia'] ?? []))
               . '</div></div>';
     }
     return $out;
+}
+
+/* Causa raiz do incidente: o que a evidência gravada pelo monitor permite
+ * afirmar. Incidentes anteriores à v1.4 não têm evidência — e aí a linha
+ * simplesmente não aparece, em vez de inventar um diagnóstico. */
+function render_causa(array $ev): string
+{
+    if (!$ev) { return ''; }
+    $camada = (string) ($ev['camada'] ?? '');
+    if ($camada === 'origem') {
+        list($cls, $rot) = ['c-origem', 'servidor de origem'];
+    } elseif ($camada === 'borda') {
+        list($cls, $rot) = ['c-borda', 'Cloudflare ↔ origem'];
+    } elseif ($camada === 'rede') {
+        list($cls, $rot) = ['c-rede', 'rede / sem resposta'];
+    } else {
+        list($cls, $rot) = ['c-ind', 'camada indeterminada'];
+    }
+
+    $partes = [];
+    if (!empty($ev['explica']))      { $partes[] = (string) $ev['explica']; }
+    if (!empty($ev['origem_texto'])) { $partes[] = 'Sonda: ' . $ev['origem_texto']; }
+    if (!empty($ev['etapa']))        { $partes[] = 'etapa: ' . $ev['etapa']; }
+    if (!empty($ev['ms']))           { $partes[] = $ev['ms'] . 'ms'; }
+
+    return '<div class="causa"><span class="camada ' . $cls . '">'
+         . '<i class="fa-solid fa-crosshairs"></i> ' . h($rot) . '</span>'
+         . ($partes ? '<span class="causa-txt">' . h(implode(' · ', $partes)) . '</span>' : '')
+         . (!empty($ev['cf_ray'])
+             ? '<span class="ray" title="Identificador da requisição na Cloudflare — use ao abrir chamado">'
+               . h((string) $ev['cf_ray']) . '</span>' : '')
+         . '</div>';
 }
 
 /* Comparativo: barras por dia (altura = indisponibilidade) + números do período. */
@@ -745,6 +788,17 @@ h3.sec .acoes{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
   background:var(--ok-bg);color:var(--ok);flex:0 0 38px}
 .inc.aberto .inc-ico{background:var(--down-bg);color:var(--down)}
 .inc-txt p{margin:4px 0 0;font-size:.82rem;color:var(--cor-texto-sec)}
+.causa{margin-top:7px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.camada{font-size:.68rem;font-weight:700;border-radius:20px;padding:3px 9px;white-space:nowrap}
+.camada i{margin-right:4px}
+.c-origem{background:var(--down-bg);color:var(--down)}
+.c-borda{background:var(--warn-bg);color:var(--warn)}
+.c-rede{background:#EDE9FE;color:#6D28D9}
+.c-ind{background:var(--cor-fundo);color:var(--cor-texto-sec)}
+.causa-txt{font-size:.72rem;color:var(--cor-texto-sec)}
+.ray{font-size:.62rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  color:var(--cor-texto-sec);background:var(--cor-fundo);border:1px solid var(--cor-borda);
+  border-radius:5px;padding:2px 6px}
 .inc-id{font-size:.66rem;color:var(--cor-texto-sec);background:var(--cor-fundo);
   border:1px solid var(--cor-borda);border-radius:20px;padding:3px 8px;margin-left:6px}
 .badge-status{padding:4px 10px;border-radius:30px;font-weight:600;font-size:.72rem;margin-left:6px}

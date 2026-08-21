@@ -74,6 +74,10 @@ const DM_DESTINOS = ['alequizao', 'djalma_rapha'];
 $cred = is_readable(CRED_ARQ) ? (parse_ini_file(CRED_ARQ) ?: []) : [];
 define('LOGIN_USER', (string) ($cred['usuario'] ?? ''));
 define('LOGIN_PASS', (string) ($cred['senha'] ?? ''));
+/* IP real do servidor de origem (opcional). Com ele o monitor consegue provar
+   DE QUE LADO a falha aconteceu: bate direto na origem, furando a Cloudflare.
+   Sem ele, a sonda é pulada e o veredito fica "indeterminado". */
+define('ORIGEM_IP', (string) ($cred['origem_ip'] ?? ''));
 
 $DIR    = __DIR__;
 $ESTADO = $DIR . '/estado.json';
@@ -88,9 +92,12 @@ if (in_array('--exemplos', $argv ?? [], true)) {
     $t = time();
     echo msg_alerta('critico', [
         'Incidente' => inc_id($t), 'Detectado' => date('d/m H:i:s', $t),
-        'Falha'     => 'Internal Server Error (Apache/Traccar caiu, HTTP 500)',
+        'Falha'     => 'Cloudflare não alcançou o servidor de origem (HTTP 530)',
+        'Onde'      => camada_rotulo('borda')
+                     . ' · origem respondeu 200 em 796ms — a falha está entre a Cloudflare e o servidor',
+        'CF-Ray'    => 'a2eb5499b9e94f2e-EWR',
         'Impacto'   => 'clientes sem acesso ao rastreamento',
-    ], 'Checar Traccar + Apache no servidor'), "\n\n";
+    ], acao_sugerida(['camada' => 'borda', 'origem_ok' => true])), "\n\n";
     echo msg_alerta('ativo', [
         'Incidente' => inc_id($t),
         'Fora desde'=> date('d/m H:i:s', $t) . ' (' . dur(3900) . ')',
@@ -152,6 +159,7 @@ if ($fh === false || !flock($fh, LOCK_EX | LOCK_NB)) {
 }
 
 /* ===== HTTP: um único handle reaproveitado (keep-alive + gzip) ===== */
+$EVIDENCIA = [];   // evidência da falha do ciclo atual (ver anotar_evidencia)
 $CH = curl_init();
 curl_setopt_array($CH, [
     CURLOPT_RETURNTRANSFER => true,
@@ -163,8 +171,20 @@ curl_setopt_array($CH, [
     CURLOPT_USERAGENT      => 'MonitorTraccar/2.0',
 ]);
 
+/* Cabeçalhos da última resposta (minúsculos). Preenchido por http(). */
+$CABECALHOS = [];
+
 function http(string $url, ?array $post = null): array {
-    global $CH;
+    global $CH, $CABECALHOS;
+    $CABECALHOS = [];
+    // Guardar server/cf-ray é o que separa "a origem devolveu erro" de
+    // "a Cloudflare não alcançou a origem" — sem isso o motivo é chute.
+    curl_setopt($CH, CURLOPT_HEADERFUNCTION, function ($ch, $linha) {
+        global $CABECALHOS;
+        $par = explode(':', $linha, 2);
+        if (count($par) === 2) { $CABECALHOS[strtolower(trim($par[0]))] = trim($par[1]); }
+        return strlen($linha);
+    });
     curl_setopt($CH, CURLOPT_URL, $url);
     if ($post !== null) {
         curl_setopt($CH, CURLOPT_POST, true);
@@ -173,25 +193,141 @@ function http(string $url, ?array $post = null): array {
         curl_setopt($CH, CURLOPT_HTTPGET, true);
     }
     $body = curl_exec($CH);
+    global $CABECALHOS;
     return [
-        'code' => (int) curl_getinfo($CH, CURLINFO_HTTP_CODE),
-        'body' => (string) $body,
-        'err'  => curl_error($CH),
+        'code'   => (int) curl_getinfo($CH, CURLINFO_HTTP_CODE),
+        'body'   => (string) $body,
+        'err'    => curl_error($CH),
+        'ms'     => (int) round(curl_getinfo($CH, CURLINFO_TOTAL_TIME) * 1000),
+        'server' => (string) ($CABECALHOS['server'] ?? ''),
+        'cf_ray' => (string) ($CABECALHOS['cf-ray'] ?? ''),
     ];
+}
+
+/* ===== DE QUE LADO QUEBROU =====
+ * A Cloudflare usa a faixa 520-530 para dizer "eu não consegui falar com a
+ * origem" (521 recusou, 522 timeout, 523 inalcançável, 530 = 1016 etc.). Um
+ * 500/502 comum, ao contrário, é erro que a PRÓPRIA origem produziu e a CF só
+ * repassou. Distinguir os dois é a diferença entre "reiniciar o Traccar" e
+ * "olhar a rede/o servidor". */
+function camada_da_falha(int $code, string $server, string $err): array
+{
+    $cf = stripos($server, 'cloudflare') !== false;
+    if ($code >= 520 && $code <= 530) {
+        return ['borda', 'Cloudflare não alcançou o servidor de origem (HTTP ' . $code . ')'];
+    }
+    if ($code >= 500 && $code < 520) {
+        return [$cf ? 'origem' : 'origem',
+            'A origem respondeu com erro ' . $code . ($cf ? ' (repassado pela Cloudflare)' : '')];
+    }
+    if ($code === 0) {
+        return ['rede', 'Nenhuma resposta: ' . ($err !== '' ? $err : 'conexão não completou')];
+    }
+    return ['indeterminado', 'HTTP ' . $code];
+}
+
+/* ===== SONDA DIRETA NA ORIGEM =====
+ * Repete a requisição resolvendo o domínio NO IP DE ORIGEM, furando a
+ * Cloudflare — mesmo Host e mesmo SNI, então o certificado continua válido.
+ * Só roda quando uma falha já foi confirmada: é uma requisição extra por
+ * incidente, não por ciclo. Devolve o veredito da causa raiz. */
+function sondar_origem(): array
+{
+    if (ORIGEM_IP === '') {
+        return ['ok' => null, 'veredito' => 'indeterminado',
+                'texto' => 'sonda de origem não configurada (origem_ip)'];
+    }
+    $host = (string) parse_url(ALVO_URL, PHP_URL_HOST);
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => ALVO_URL,
+        CURLOPT_RESOLVE        => [$host . ':443:' . ORIGEM_IP, $host . ':80:' . ORIGEM_IP],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => TIMEOUT,
+        CURLOPT_CONNECTTIMEOUT => TIMEOUT,
+        CURLOPT_SSL_VERIFYPEER => false,   // a origem costuma ter cert da CF (origin cert)
+        CURLOPT_SSL_VERIFYHOST => 0,
+        CURLOPT_USERAGENT      => 'MonitorTraccar/2.0 (sonda-origem)',
+    ]);
+    $body = curl_exec($ch);
+    $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $ms   = (int) round(curl_getinfo($ch, CURLINFO_TOTAL_TIME) * 1000);
+    $err  = curl_error($ch);
+    curl_close($ch);
+
+    $viva = ($code > 0 && $code < 500);
+    if ($viva) {
+        return ['ok' => true, 'veredito' => 'borda',
+                'texto' => 'origem respondeu ' . $code . ' em ' . $ms . 'ms — a falha está entre a Cloudflare e o servidor'];
+    }
+    return ['ok' => false, 'veredito' => 'origem',
+            'texto' => 'origem também falhou (' . ($code ?: ($err ?: 'sem resposta')) . ') — o problema é no servidor'];
 }
 
 /* ===== CHECAGEM (uma passada) =====
  * Em escada: se a home já está fora, não faz sentido bater em api/server nem
  * gastar um POST de login. Retorna a lista de falhas (vazia = tudo ok). */
+/* Rótulo humano da camada e a ação que ela realmente pede. */
+function camada_rotulo(string $camada): string
+{
+    if ($camada === 'borda')  { return 'entre a Cloudflare e o servidor'; }
+    if ($camada === 'origem') { return 'no servidor de origem'; }
+    if ($camada === 'rede')   { return 'na rede / sem resposta'; }
+    return 'indeterminado';
+}
+
+function acao_sugerida(array $ev): string
+{
+    $camada = (string) ($ev['camada'] ?? '');
+    // "Origem viva" só pode ser afirmado se a SONDA confirmou. Sem ela, o 52x
+    // apenas diz que a Cloudflare não chegou lá — e o servidor segue suspeito.
+    $sondado = array_key_exists('origem_ok', $ev) && $ev['origem_ok'] === true;
+    if ($camada === 'origem') { return 'Checar Traccar + Apache no servidor de origem'; }
+    if ($camada === 'borda') {
+        return $sondado
+            ? 'Origem viva: checar Cloudflare, firewall e rota até a origem'
+            : 'Cloudflare não alcançou a origem: checar o servidor, o firewall e a rota';
+    }
+    if ($camada === 'rede')   { return 'Sem resposta: checar conectividade e DNS'; }
+    return 'Checar Traccar + Apache no servidor';
+}
+
+/* Evidência técnica da última falha (código, cabeçalhos, camada). Fica global
+ * porque atravessa a checagem, o incidente, o alerta e o painel. */
+$EVIDENCIA = [];
+
+function anotar_evidencia(array $r, string $etapa): void
+{
+    global $EVIDENCIA;
+    list($camada, $explica) = camada_da_falha((int) $r['code'], (string) $r['server'], (string) $r['err']);
+    $EVIDENCIA = [
+        'etapa'   => $etapa,
+        'code'    => (int) $r['code'],
+        'ms'      => (int) $r['ms'],
+        'server'  => (string) $r['server'],
+        'cf_ray'  => (string) $r['cf_ray'],
+        'camada'  => $camada,
+        'explica' => $explica,
+    ];
+}
+
 function checar(bool $com_login): array {
+    global $EVIDENCIA;
+    $EVIDENCIA = [];
+
     // 1) Página de login no ar (detecta o "Internal Server Error" do Apache)
     $home = http(ALVO_URL);
     $ise  = stripos($home['body'], 'Internal Server Error') !== false
          || stripos($home['body'], 'internal error or misconfiguration') !== false;
     if ($home['code'] >= 500 || $ise) {
-        return ['Internal Server Error (Apache/Traccar caiu, HTTP ' . $home['code'] . ')'];
+        anotar_evidencia($home, 'home');
+        // O motivo agora sai da EVIDÊNCIA, não de um rótulo fixo: 520-530 é a
+        // Cloudflare sem alcançar a origem, e chamar isso de "Apache caiu" foi
+        // exatamente o diagnóstico errado que o painel exibiu por meses.
+        return [$EVIDENCIA['explica']];
     }
     if ($home['code'] !== 200) {
+        anotar_evidencia($home, 'home');
         return ["Página não abre (HTTP {$home['code']}" . ($home['err'] ? " / {$home['err']}" : '') . ')'];
     }
     if (stripos($home['body'], '<div id="root">') === false
@@ -202,6 +338,7 @@ function checar(bool $com_login): array {
     // 2) Backend Traccar vivo
     $srv = http(ALVO_URL . 'api/server');
     if ($srv['code'] !== 200) {
+        anotar_evidencia($srv, 'api/server');
         return ["Backend Traccar fora (api/server HTTP {$srv['code']})"];
     }
 
@@ -211,6 +348,7 @@ function checar(bool $com_login): array {
     if ($com_login && LOGIN_USER !== '' && LOGIN_PASS !== '') {
         $sess = http(ALVO_URL . 'api/session', ['email' => LOGIN_USER, 'password' => LOGIN_PASS]);
         if ($sess['code'] !== 200) {
+            anotar_evidencia($sess, 'api/session');
             return ["Login FALHOU para '" . LOGIN_USER . "' (HTTP {$sess['code']})"];
         }
         if (strpos($sess['body'], '"id"') === false) {
@@ -352,6 +490,9 @@ function arquivar_dia(array $prev): string
             'seg'    => (int) ($i['seg'] ?? 0) ?: max(0, $fim - $ini),
             'motivo' => (string) ($i['motivo'] ?? ''),
             'aberto_na_virada' => ((int) ($i['fim'] ?? 0) === 0),
+            // A evidência (camada, CF-Ray, sonda) vai junto: é o que responde
+            // "qual foi a causa raiz?" meses depois, quando o log já rotacionou.
+            'evidencia' => (array) ($i['evidencia'] ?? []),
         ];
     }
 
@@ -432,6 +573,16 @@ for ($ciclo = 0; $ciclo < CICLOS; $ciclo++) {
         if (!$falhas) { $blip = true; }
     }
 
+    /* Falha confirmada: bate DIRETO na origem, furando a Cloudflare, para saber
+     * de que lado quebrou. Uma requisição extra por incidente — não por ciclo. */
+    if ($falhas && $EVIDENCIA) {
+        $sonda = sondar_origem();
+        $EVIDENCIA['origem_ok']      = $sonda['ok'];
+        $EVIDENCIA['origem_texto']   = $sonda['texto'];
+        // A sonda tem a palavra final: ela testou os dois caminhos.
+        if ($sonda['veredito'] !== 'indeterminado') { $EVIDENCIA['camada'] = $sonda['veredito']; }
+    }
+
     $agora   = date('Y-m-d H:i:s');
     $status  = $falhas ? 'down' : 'ok';
     $detalhe = $falhas ? implode(' | ', $falhas) : 'tudo ok';
@@ -478,7 +629,8 @@ for ($ciclo = 0; $ciclo < CICLOS; $ciclo++) {
     }
     // Abre incidente na queda; fecha na volta (guarda os 20 mais recentes).
     if ($mudou && $status === 'down') {
-        $d_incidentes[] = ['inicio' => $ts, 'fim' => 0, 'seg' => 0, 'motivo' => $detalhe];
+        $d_incidentes[] = ['inicio' => $ts, 'fim' => 0, 'seg' => 0, 'motivo' => $detalhe,
+                           'evidencia' => $EVIDENCIA];
         $d_incidentes = array_slice($d_incidentes, -20);
     } elseif ($mudou && $status === 'ok' && $d_incidentes) {
         $i = count($d_incidentes) - 1;
@@ -523,12 +675,19 @@ for ($ciclo = 0; $ciclo < CICLOS; $ciclo++) {
     } elseif ($carencia) {
         $aviso = null; // fora do ar, mas ainda dentro da carência de 5 min
     } elseif ($status === 'down' && $avisado === 'ok') {
-        $aviso = msg_alerta('critico', [
+        $campos_critico = [
             'Incidente' => inc_id($inc_em),
             'Fora desde'=> date('d/m H:i:s', $inc_em) . ' (' . dur($fora_ha) . ')',
             'Falha'     => $detalhe,
-            'Impacto'   => 'clientes sem acesso ao rastreamento',
-        ], 'Checar Traccar + Apache no servidor');
+        ];
+        // Onde quebrou: sai da sonda, não de suposição. Muda a ação recomendada.
+        if (!empty($EVIDENCIA['camada'])) {
+            $campos_critico['Onde'] = camada_rotulo((string) $EVIDENCIA['camada'])
+                . (!empty($EVIDENCIA['origem_texto']) ? ' · ' . $EVIDENCIA['origem_texto'] : '');
+        }
+        if (!empty($EVIDENCIA['cf_ray'])) { $campos_critico['CF-Ray'] = $EVIDENCIA['cf_ray']; }
+        $campos_critico['Impacto'] = 'clientes sem acesso ao rastreamento';
+        $aviso = msg_alerta('critico', $campos_critico, acao_sugerida($EVIDENCIA));
         $avisado = 'down';
         $transicoes[] = $ts;
         $nivel = 'critico';
@@ -625,6 +784,7 @@ for ($ciclo = 0; $ciclo < CICLOS; $ciclo++) {
         'relatorio_data'=> $relatorio_data,
         'checado_em'   => $agora,
         'detalhe'      => $detalhe,
+        'evidencia'    => $EVIDENCIA,
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
 
     /* ===== LOG =====
@@ -635,6 +795,8 @@ for ($ciclo = 0; $ciclo < CICLOS; $ciclo++) {
     }
     if ($mudou || $aviso !== null || $status === 'down' || $ultimo_ciclo) {
         gravar_log($LOG, "[{$agora}] " . strtoupper($status) . " :: {$detalhe}"
+            . (!empty($EVIDENCIA['camada']) ? " :: CAMADA(" . $EVIDENCIA['camada']
+                . (!empty($EVIDENCIA['cf_ray']) ? ' ray=' . $EVIDENCIA['cf_ray'] : '') . ")" : '')
             . ($aviso !== null ? " :: AVISO({$aviso_resultado})" : '') . "\n");
     }
 

@@ -5,3 +5,11 @@
 ; (e registra isso no log, para não ficar cego sem avisar).
 usuario = seu_usuario_traccar
 senha   = sua_senha_traccar
+
+; IP REAL do servidor de origem (opcional, mas é o que fecha a causa raiz).
+; Com ele, ao confirmar uma falha o monitor repete a requisição resolvendo o
+; domínio direto nesse IP — furando a Cloudflare, com o mesmo Host e SNI. Se a
+; origem responde e a borda não, a falha está na Cloudflare/rota; se nenhuma
+; responde, o problema é o servidor. Sem este campo o veredito fica
+; "indeterminado" e o painel não afirma nada que não tenha verificado.
+origem_ip = 203.0.113.10

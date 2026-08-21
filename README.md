@@ -32,8 +32,30 @@ cURL e arquivos JSON.
 | Teto diário | Máximo de 8 Direct por dia; estourando, só log |
 | Relatório das 23:50 | 1 Direct/dia com disponibilidade, tempo fora e incidentes |
 
-**Painel (v1.3)** — filtro por data, linha do tempo de 24h, comparativo de 7/30/90 dias,
-busca nos incidentes, exportação CSV/JSON e Web Push nativo (VAPID + aes128gcm).
+**Painel (v1.4)** — filtro por data, linha do tempo de 24h, comparativo de 7/30/90 dias,
+causa raiz por incidente, busca, exportação CSV/JSON e Web Push nativo (VAPID + aes128gcm).
+
+---
+
+## 🔍 Causa raiz do incidente
+
+O site fica atrás da Cloudflare, e "HTTP 5xx" sozinho não diz de que lado quebrou. O monitor
+guarda a **evidência** de cada falha e emite um veredito:
+
+| Camada | Quando | O que fazer |
+|---|---|---|
+| `origem` | 500-519 — o servidor produziu o erro e a CF repassou | Checar Traccar + Apache na origem |
+| `borda` | **520-530** — código da Cloudflare para "não alcancei a origem" | Checar firewall, rota e a própria CF |
+| `rede` | HTTP 0 — nada respondeu | Checar conectividade e DNS |
+
+Com `origem_ip` configurado, ao confirmar uma falha o monitor **repete a requisição direto no
+IP de origem** (`CURLOPT_RESOLVE`, mesmo Host e SNI, cert continua válido), furando a
+Cloudflare. Se a origem responde e a borda não, a culpa é da CF/rota; se nenhuma responde, é o
+servidor. É uma requisição extra **por incidente**, não por ciclo.
+
+Cada incidente guarda `camada`, `code`, `cf_ray`, `ms` e o texto da sonda — no painel, no CSV e
+no alerta do Direct. Sem `origem_ip` o veredito fica `indeterminado`: o painel **não afirma o
+que não verificou**.
 
 ---
 
