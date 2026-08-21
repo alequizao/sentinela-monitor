@@ -873,7 +873,7 @@ h3.sec .acoes{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
 .trocavel{transition:opacity .22s ease}
 /* Dimming discreto: o suficiente para dizer "isto ainda é o dado antigo", sem
    apagar a tela. A dessaturação saiu — ela é que fazia parecer "desligado". */
-body.carregando .trocavel{opacity:.78;pointer-events:none}
+body.carregando .trocavel{opacity:.85;pointer-events:none}
 body.carregando .filtro{cursor:progress}
 .entrando{animation:entra .22s ease}
 @keyframes entra{from{opacity:.55;transform:translateY(2px)}to{opacity:1;transform:none}}
