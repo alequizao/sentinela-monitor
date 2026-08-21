@@ -1,0 +1,23 @@
+# ===== Dados de operação (gerados pelo monitor, mudam a cada minuto) =====
+estado.json
+historico/
+monitor.log
+cron.out
+*.lock
+"&1"
+&1
+
+# ===== Segredo / dados de assinantes =====
+# Endpoints de Web Push identificam os aparelhos inscritos: nunca vão para o repo.
+push_subs.json
+# As credenciais do Traccar ficam em /etc/monitor-traccar.conf (fora do docroot),
+# mas se um dia alguém copiar para cá, o git ignora.
+monitor-traccar.conf
+*.conf
+
+# ===== Lixo =====
+*.bak
+*.bak-*
+*.tar.gz
+node_modules/
+.DS_Store

@@ -1,0 +1,7 @@
+; Credenciais do usuário do Traccar usadas no teste de login REAL.
+; Local no servidor: /etc/monitor-traccar.conf  (fora do docroot, dono root, chmod 600)
+;   cp monitor-traccar.conf.example /etc/monitor-traccar.conf && chmod 600 /etc/monitor-traccar.conf
+; Sem este arquivo o monitor continua rodando, mas pula o teste de login
+; (e registra isso no log, para não ficar cego sem avisar).
+usuario = seu_usuario_traccar
+senha   = sua_senha_traccar
