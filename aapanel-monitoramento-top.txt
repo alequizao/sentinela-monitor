@@ -1,0 +1,20 @@
+aaPanel — VPS Nova Monitoramento Top
+=====================================
+Instalado em: 2026-08-31
+
+Painel (IPv4): https://179.199.136.173:12215/21aea344
+Painel (IPv6): https://[2a02:4780:6e:c0bf::1]:12215/21aea344
+Usuario: szgmrull
+Senha: 1e089642
+
+Porta do painel: 12215
+Entrada de seguranca (safe path): /21aea344
+Portas para liberar no firewall/security group: 12215, 888, 80, 443, 20, 21
+
+SSH da VPS: root@179.199.136.173 (senha Bambulaba1@014540)
+
+
+
+https://179.199.136.173:1454/alequizao
+Usuario: alequizao
+Senha: alequizao

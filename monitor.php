@@ -44,11 +44,17 @@ declare(strict_types=1);
 
 date_default_timezone_set('America/Maceio');
 
-/* ===== CONFIG ===== */
-const ALVO_URL   = 'https://monitoramento.top/';
+/* ===== INSTÂNCIA =====
+ * O mesmo código monitora mais de um Traccar: um wrapper fino (ex.:
+ * nova/monitor.php) define as constantes abaixo e dá require neste arquivo.
+ * Sem wrapper, valem os padrões — a instância original (monitoramento.top). */
+if (!defined('ALVO_URL'))   { define('ALVO_URL', 'https://monitoramento.top/'); }
+if (!defined('ALVO_NOME'))  { define('ALVO_NOME', 'monitoramento.top'); }   // rótulo nos alertas
+if (!defined('INST_DIR'))   { define('INST_DIR', __DIR__); }                // estado/histórico/log
+if (!defined('PAINEL_URL')) { define('PAINEL_URL', 'https://publishdev.com.br/monitoramentotop/'); }
 /* Credenciais do Traccar ficam FORA do docroot, em arquivo 600 do root.
    Formato (ini):  usuario = xxx / senha = yyy  */
-const CRED_ARQ   = '/etc/monitor-traccar.conf';
+if (!defined('CRED_ARQ'))   { define('CRED_ARQ', '/etc/monitor-traccar.conf'); }
 const TIMEOUT      = 6;   // segundos por requisição (site saudável responde <1s)
 const CICLOS       = 11;  // checagens por execução do cron
 const INTERVALO_SEG = 5;  // espera entre ciclos (11 x 5s ≈ 1 min de cobertura)
@@ -79,8 +85,17 @@ define('LOGIN_PASS', (string) ($cred['senha'] ?? ''));
    Sem ele, a sonda é pulada e o veredito fica "indeterminado". */
 define('ORIGEM_IP', (string) ($cred['origem_ip'] ?? ''));
 
-$DIR    = __DIR__;
+require_once __DIR__ . '/lib_dossie.php';
+
+$DIR    = INST_DIR;
 $ESTADO = $DIR . '/estado.json';
+
+/* ===== NOTA NO DOSSIÊ: php monitor.php --nota INC-XXXX "texto" ===== */
+if (isset($argv[1]) && $argv[1] === '--nota') {
+    $ok = dossie_nota((string) ($argv[2] ?? ''), trim((string) ($argv[3] ?? '')), 'operador');
+    echo $ok ? "nota gravada em {$argv[2]}\n" : "dossiê não encontrado\n";
+    exit($ok ? 0 : 1);
+}
 $LOG    = $DIR . '/monitor.log';
 // Lock próprio: o cron já usa "flock -n monitor.lock", então NÃO reutilize esse
 // arquivo aqui — o lock do cron bloquearia o do próprio script.
@@ -273,6 +288,7 @@ function camada_rotulo(string $camada): string
     if ($camada === 'borda')  { return 'entre a Cloudflare e o servidor'; }
     if ($camada === 'origem') { return 'no servidor de origem'; }
     if ($camada === 'rede')   { return 'na rede / sem resposta'; }
+    if ($camada === 'tunel')  { return 'no Cloudflare Tunnel (cloudflared desconectado)'; }
     return 'indeterminado';
 }
 
@@ -282,6 +298,7 @@ function acao_sugerida(array $ev): string
     // "Origem viva" só pode ser afirmado se a SONDA confirmou. Sem ela, o 52x
     // apenas diz que a Cloudflare não chegou lá — e o servidor segue suspeito.
     $sondado = array_key_exists('origem_ok', $ev) && $ev['origem_ok'] === true;
+    if ($camada === 'tunel')  { return 'Túnel desligado: systemctl restart cloudflared na VPS e conferir o ingress no Zero Trust'; }
     if ($camada === 'origem') { return 'Checar Traccar + Apache no servidor de origem'; }
     if ($camada === 'borda') {
         return $sondado
@@ -308,7 +325,14 @@ function anotar_evidencia(array $r, string $etapa): void
         'cf_ray'  => (string) $r['cf_ray'],
         'camada'  => $camada,
         'explica' => $explica,
+        // Código de erro da Cloudflare (1033 = túnel sem cloudflared, 1016 =
+        // origem DNS, 1000...). Vem no HTML da página de erro da borda.
+        'cf_erro' => preg_match('/error code:?\s*(\d{4})/i', (string) ($r['body'] ?? ''), $m) ? (int) $m[1] : 0,
     ];
+    if ($EVIDENCIA['cf_erro'] === 1033) {
+        $EVIDENCIA['camada']  = 'tunel';
+        $EVIDENCIA['explica'] = 'Cloudflare Tunnel sem cloudflared conectado (HTTP ' . $r['code'] . ', erro 1033)';
+    }
 }
 
 function checar(bool $com_login): array {
@@ -365,11 +389,11 @@ function checar(bool $com_login): array {
 function msg_alerta(string $nivel, array $campos, string $acao = ''): string
 {
     $cab = [
-        'critico'  => "🛡️ SENTINELA · monitoramento.top\n🔴 ALERTA CRÍTICO",
-        'ativo'    => "🛡️ SENTINELA · monitoramento.top\n🔴 INCIDENTE EM ANDAMENTO",
-        'resolvido'=> "🛡️ SENTINELA · monitoramento.top\n🟢 INCIDENTE RESOLVIDO",
-        'atencao'  => "🛡️ SENTINELA · monitoramento.top\n🟡 ATENÇÃO · SERVIÇO INSTÁVEL",
-        'relatorio'=> "🛡️ SENTINELA · monitoramento.top\n📊 RELATÓRIO DO DIA",
+        'critico'  => "🛡️ SENTINELA · " . ALVO_NOME . "\n🔴 ALERTA CRÍTICO",
+        'ativo'    => "🛡️ SENTINELA · " . ALVO_NOME . "\n🔴 INCIDENTE EM ANDAMENTO",
+        'resolvido'=> "🛡️ SENTINELA · " . ALVO_NOME . "\n🟢 INCIDENTE RESOLVIDO",
+        'atencao'  => "🛡️ SENTINELA · " . ALVO_NOME . "\n🟡 ATENÇÃO · SERVIÇO INSTÁVEL",
+        'relatorio'=> "🛡️ SENTINELA · " . ALVO_NOME . "\n📊 RELATÓRIO DO DIA",
     ][$nivel];
 
     $linha = str_repeat('━', 18);
@@ -474,7 +498,7 @@ function arquivar_dia(array $prev): string
     // Dia sem nenhuma checagem não vira arquivo (evita lixo se o cron ficou parado).
     if ((int) ($prev['dia_checagens'] ?? 0) <= 0) { return 'dia-vazio'; }
 
-    $dir = __DIR__ . '/historico';
+    $dir = INST_DIR . '/historico';
     if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) { return 'sem-dir'; }
 
     // Incidente que atravessou a meia-noite fica fechado às 23:59:59 do dia dele.
@@ -580,7 +604,9 @@ for ($ciclo = 0; $ciclo < CICLOS; $ciclo++) {
         $EVIDENCIA['origem_ok']      = $sonda['ok'];
         $EVIDENCIA['origem_texto']   = $sonda['texto'];
         // A sonda tem a palavra final: ela testou os dois caminhos.
-        if ($sonda['veredito'] !== 'indeterminado') { $EVIDENCIA['camada'] = $sonda['veredito']; }
+        if ($sonda['veredito'] !== 'indeterminado' && ($EVIDENCIA['camada'] ?? '') !== 'tunel') {
+            $EVIDENCIA['camada'] = $sonda['veredito'];
+        }
     }
 
     $agora   = date('Y-m-d H:i:s');
@@ -632,12 +658,17 @@ for ($ciclo = 0; $ciclo < CICLOS; $ciclo++) {
         $d_incidentes[] = ['inicio' => $ts, 'fim' => 0, 'seg' => 0, 'motivo' => $detalhe,
                            'evidencia' => $EVIDENCIA];
         $d_incidentes = array_slice($d_incidentes, -20);
+        // Dossiê: prontuário do incidente (lib_dossie.php), lido por dossie.php.
+        dossie_abrir($ts, $detalhe, $EVIDENCIA);
+    } elseif ($status === 'down' && (int) $prev['inc_em'] > 0) {
+        dossie_atualizar((int) $prev['inc_em'], $detalhe, $EVIDENCIA, $ts);
     } elseif ($mudou && $status === 'ok' && $d_incidentes) {
         $i = count($d_incidentes) - 1;
         if ((int) $d_incidentes[$i]['fim'] === 0) {
             $d_incidentes[$i]['fim'] = $ts;
             $d_incidentes[$i]['seg'] = max(0, $ts - (int) $d_incidentes[$i]['inicio']);
         }
+        if ((int) $prev['inc_em'] > 0) { dossie_fechar((int) $prev['inc_em'], $ts, max(0, $ts - (int) $prev['inc_em'])); }
     }
 
     /* ===== DECIDIR AVISO =====
@@ -735,6 +766,7 @@ for ($ciclo = 0; $ciclo < CICLOS; $ciclo++) {
         $aviso_resultado .= ' ' . enviar_push($p_tit, $p_corpo, $p_tag, $p_crit);
         $aviso_enviado   = true;
         $avisos_dia++;
+        if ($inc_em > 0) { dossie_aviso($inc_em, $nivel, $aviso_resultado, $ts); }
         // Silêncio por instabilidade só passa a valer com o aviso 🟡 entregue.
         if ($flap_pretendido > 0) { $flap_ate = $flap_pretendido; }
     }
@@ -814,7 +846,7 @@ fclose($fh);
  * $tag agrupa por tipo: um alerta novo substitui o anterior na bandeja. */
 function enviar_push(string $titulo, string $corpo, string $tag, bool $critico = false): string
 {
-    $arq = __DIR__ . '/push_subs.json';
+    $arq = INST_DIR . '/push_subs.json';
     if (!is_readable($arq)) { return 'sem-inscritos'; }
     $subs = json_decode((string) file_get_contents($arq), true);
     if (!is_array($subs) || !$subs) { return 'sem-inscritos'; }
@@ -832,7 +864,7 @@ function enviar_push(string $titulo, string $corpo, string $tag, bool $critico =
         'corpo'   => $corpo,
         'tag'     => $tag,
         'critico' => $critico,
-        'url'     => 'https://publishdev.com.br/monitoramentotop/',
+        'url'     => PAINEL_URL,
     ], JSON_UNESCAPED_UNICODE);
 
     $ok = 0; $err = 0; $mudou = false;
@@ -863,9 +895,9 @@ function enviar_push(string $titulo, string $corpo, string $tag, bool $critico =
 function push_do_alerta(string $nivel, string $detalhe, string $extra = ''): array
 {
     $mapa = [
-        'critico'  => ['🔴 monitoramento.top FORA DO AR', 'queda', true],
+        'critico'  => ['🔴 ' . ALVO_NOME . ' FORA DO AR', 'queda', true],
         'ativo'    => ['🔴 Ainda fora do ar', 'queda', true],
-        'resolvido'=> ['🟢 monitoramento.top voltou', 'queda', false],
+        'resolvido'=> ['🟢 ' . ALVO_NOME . ' voltou', 'queda', false],
         'atencao'  => ['🟡 Serviço instável', 'instavel', false],
         'relatorio'=> ['📊 Relatório do dia', 'relatorio', false],
     ];

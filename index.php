@@ -26,12 +26,28 @@ declare(strict_types=1);
 
 date_default_timezone_set('America/Maceio');
 
-const VERSAO     = '1.5.0';
-const ESTADO_ARQ = __DIR__ . '/estado.json';
-const HIST_DIR   = __DIR__ . '/historico';
-const SUBS_ARQ   = __DIR__ . '/push_subs.json';   // inscrições Web Push (bloqueado na web)
+const VERSAO     = '1.7.0';
+
+/* ===== INSTÂNCIA =====
+ * O mesmo painel serve mais de um Traccar: um wrapper fino (ex.: nova/index.php)
+ * define as constantes abaixo e dá require neste arquivo. Sem wrapper, valem os
+ * padrões — a instância original (monitoramento.top). */
+if (!defined('ALVO_NOME'))   { define('ALVO_NOME', 'monitoramento.top'); }
+if (!defined('ALVO_LINK'))   { define('ALVO_LINK', 'https://monitoramento.top/'); }
+if (!defined('INST_DIR'))    { define('INST_DIR', __DIR__); }
+if (!defined('PAINEL_PATH')) { define('PAINEL_PATH', '/monitoramentotop/'); }
+
+define('ESTADO_ARQ', INST_DIR . '/estado.json');
+define('HIST_DIR',   INST_DIR . '/historico');
+define('SUBS_ARQ',   INST_DIR . '/push_subs.json'); // inscrições Web Push (bloqueado na web)
 const AGENDA_DIR = '/www/wwwroot/publishdev.com.br/agendamentos';
-const META_DISP  = 99.9;                          // meta de disponibilidade (SLA interno)
+const META_DISP  = 99.9;                            // meta de disponibilidade (SLA interno)
+
+/* Instâncias monitoradas — vira o seletor no topo do painel. */
+const INSTANCIAS = [
+    ['nome' => 'monitoramento.top',      'path' => '/monitoramentotop/'],
+    ['nome' => 'nova.monitoramento.top', 'path' => '/monitoramentotop/nova/'],
+];
 
 /* ===== WEB PUSH =====
  * Reaproveita a lib de Web Push nativo do sistema de agendamentos (VAPID +
@@ -110,7 +126,7 @@ if (isset($_GET['push'])) {
                 'titulo' => '🛡️ Sentinela · teste',
                 'corpo'  => 'Notificações funcionando. Alertas de queda chegam por aqui.',
                 'tag'    => 'sentinela-teste',
-                'url'    => '/monitoramentotop/',
+                'url'    => PAINEL_PATH,
             ], JSON_UNESCAPED_UNICODE));
             echo json_encode(['ok' => !empty($r['ok']),
                 'msg' => !empty($r['ok']) ? 'Notificação de teste enviada.'
@@ -541,7 +557,8 @@ function render_incidentes(array $m, string $busca = ''): string
               . ($aberto ? 'fa-triangle-exclamation' : 'fa-circle-check') . '"></i></div>'
               . '<div class="inc-txt"><strong>' . h($faixa) . '</strong>'
               . '<span class="badge-status ' . ($aberto ? 'b-down' : 'b-ok') . '">' . h($dura) . '</span>'
-              . '<span class="inc-id">' . h(inc_id($ini)) . '</span>'
+              . '<a class="inc-id" href="' . h(PAINEL_PATH) . 'dossie.php?id=' . h(inc_id($ini)) . '" title="Abrir o dossiê deste incidente">'
+              . h(inc_id($ini)) . ' <i class="fa-solid fa-folder-open"></i></a>'
               . (!empty($i['aberto_na_virada']) ? '<span class="inc-id">cruzou a meia-noite</span>' : '')
               . '<p>' . h(mascarar((string) ($i['motivo'] ?? ''))) . '</p>'
               . render_causa((array) ($i['evidencia'] ?? []))
@@ -588,6 +605,8 @@ function render_causa(array $ev): string
         list($cls, $rot) = ['c-borda', 'Cloudflare ↔ origem'];
     } elseif ($camada === 'rede') {
         list($cls, $rot) = ['c-rede', 'rede / sem resposta'];
+    } elseif ($camada === 'tunel') {
+        list($cls, $rot) = ['c-borda', 'Cloudflare Tunnel desconectado'];
     } else {
         list($cls, $rot) = ['c-ind', 'camada indeterminada'];
     }
@@ -717,7 +736,7 @@ header('Pragma: no-cache');
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Sentinela · monitoramento.top</title>
+<title>Sentinela · <?= h(ALVO_NOME) ?></title>
 <!-- Favicon embutido (SVG em data:URI): sem isso o navegador pede /favicon.ico
      na RAIZ do domínio, que não existe, e o console fica com um 404 fixo.
      O escudo usa o azul do padrão visual; o .ico é declarado vazio de propósito
@@ -744,6 +763,13 @@ body{background:var(--cor-fundo);color:var(--cor-texto);
 .topo h1{font-size:1.45rem;font-weight:800;margin:0}
 .topo h1 i{color:var(--cor-primaria);margin-right:8px}
 .topo p{margin:2px 0 0;color:var(--cor-texto-sec);font-size:.86rem}
+.instancias{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.inst-pill{display:inline-flex;align-items:center;gap:6px;font-size:.72rem;font-weight:600;
+  border:1px solid var(--cor-borda);border-radius:20px;padding:4px 11px;text-decoration:none;
+  color:var(--cor-texto-sec);background:var(--cor-card)}
+.inst-pill i{font-size:.66rem}
+.inst-pill:hover{border-color:var(--cor-primaria);color:var(--cor-primaria)}
+.inst-pill.ativo{background:var(--cor-primaria);border-color:var(--cor-primaria);color:#fff}
 .ao-vivo{display:inline-flex;align-items:center;gap:7px;background:var(--cor-card);
   border:1px solid var(--cor-borda);border-radius:30px;padding:7px 14px;font-size:.78rem;font-weight:600}
 .ao-vivo .pulse{width:8px;height:8px;border-radius:50%;background:var(--ok);
@@ -905,9 +931,21 @@ body.carregando .filtro{cursor:progress}
   <div class="topo">
     <div>
       <h1><i class="fa-solid fa-shield-halved"></i>Sentinela</h1>
-      <p>Monitor de disponibilidade de <strong>monitoramento.top</strong> · checagem a cada 5s</p>
+      <p>Monitor de disponibilidade de <strong><?= h(ALVO_NOME) ?></strong> · checagem a cada 5s</p>
+      <nav class="instancias" aria-label="Instância monitorada">
+        <?php foreach (INSTANCIAS as $inst): ?>
+          <?php if ($inst['path'] === PAINEL_PATH): ?>
+            <span class="inst-pill ativo"><i class="fa-solid fa-satellite-dish"></i> <?= h($inst['nome']) ?></span>
+          <?php else: ?>
+            <a class="inst-pill" href="<?= h($inst['path']) ?>"><i class="fa-solid fa-satellite-dish"></i> <?= h($inst['nome']) ?></a>
+          <?php endif; ?>
+        <?php endforeach; ?>
+      </nav>
     </div>
     <div class="d-flex align-items-center gap-2 flex-wrap">
+      <a class="btn-outline-soft" href="<?= h(PAINEL_PATH) ?>dossie.php" style="text-decoration:none">
+        <i class="fa-solid fa-folder-open"></i> Dossiê
+      </a>
       <button id="btn-push" class="btn-push" type="button">
         <i class="fa-solid fa-bell"></i> <span>Ativar notificações</span>
       </button>
@@ -984,7 +1022,7 @@ body.carregando .filtro{cursor:progress}
 
   <div class="rodape">
     Alertas e relatório diário via Direct do Instagram ·
-    <a href="https://monitoramento.top/" target="_blank" rel="noopener">abrir monitoramento.top</a><br>
+    <a href="<?= h(ALVO_LINK) ?>" target="_blank" rel="noopener">abrir <?= h(ALVO_NOME) ?></a><br>
     Histórico guardado por dia · <?= count(dias_arquivados()) ?> dia(s) arquivado(s) ·
     Sentinela v<?= VERSAO ?>
   </div>

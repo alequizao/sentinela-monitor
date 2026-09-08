@@ -3,6 +3,13 @@
 Monitor de uptime do **[monitoramento.top](https://monitoramento.top/)** (Traccar), com painel
 web, histórico por dia, alertas no Direct do Instagram e notificações Web Push.
 
+**v1.6: instâncias.** O mesmo código monitora mais de um Traccar. A pasta `nova/` é a
+segunda instância — **[nova.monitoramento.top](https://nova.monitoramento.top/)** (VPS
+179.199.136.173) — feita de wrappers finos (`nova/monitor.php`, `nova/index.php`) que definem
+`ALVO_URL`, `ALVO_NOME`, `INST_DIR`, `CRED_ARQ`/`PAINEL_*` e dão `require` no código original.
+Cada instância tem estado, histórico, log, inscrições push e cron próprios; o painel ganhou um
+seletor de instância no topo. Credenciais da nova: `/etc/monitor-traccar-nova.conf`.
+
 Roda **sem daemon e sem serviço externo**: um cron por minuto executa um mini-loop interno de
 11 ciclos × 5s, cobrindo o minuto inteiro. Zero dependência de biblioteca — PHP puro (7.4),
 cURL e arquivos JSON.
@@ -80,7 +87,9 @@ _Prints do painel ainda não versionados._
 | `index.php` | Painel público de status. Única coisa que o `.htaccess` deixa a web servir |
 | `historico_backfill.php` | Utilitário CLI: reconstrói dias passados a partir do `monitor.log` |
 | `sw.js` | Service worker do Web Push |
-| `.htaccess` | Nega tudo por extensão; libera só o `index.php` |
+| `.htaccess` | Nega tudo por extensão (inclui `gz/zip/tar` desde a v1.6); libera só o `index.php` |
+| `nova/monitor.php` · `nova/index.php` | Wrappers da instância **nova.monitoramento.top** (definem as constantes e reaproveitam o código acima) |
+| `nova/sw.js` · `nova/.htaccess` | Service worker e proteção próprios da instância nova |
 
 **Gerados em runtime (fora do repo):** `estado.json` (estado atual + dia corrente),
 `historico/AAAA-MM-DD.json` (um resumo congelado por dia), `push_subs.json` (inscrições push),
@@ -156,3 +165,11 @@ Quer um sistema como este para o seu negócio? Entre em contato.
 
 © Sentinela · Código proprietário, desenvolvido sob encomenda.
 Uso, cópia ou redistribuição somente com autorização.
+
+## Dossiê de incidentes (v1.7.0 — 2026-09-07)
+
+- Cada queda confirmada gera um prontuário em `<instância>/dossie/INC-XXXX.json` (`lib_dossie.php`): diagnóstico em português (causa provável, explicação, o que fazer), evidência técnica (HTTP, CF-Ray, **erro Cloudflare** extraído do HTML da borda — 1033 = túnel sem cloudflared), sonda na origem, linha do tempo, avisos disparados e notas.
+- Web: `dossie.php` (raiz) e `nova/dossie.php`; `?id=INC-XXXX` abre, `&json=1` exporta, `?q=` busca. Links no painel (botão "Dossiê" e no ID de cada incidente).
+- Nota manual: `php monitor.php --nota INC-XXXX "texto"` na pasta da instância.
+- Backfill de incidentes antigos (idempotente): `php dossie_backfill.php [pasta]`.
+- Nova camada `tunel` (erro 1033) em `camada_da_falha`/`anotar_evidencia`; a sonda não a sobrescreve.
