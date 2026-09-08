@@ -23,3 +23,4 @@ node_modules/
 .DS_Store
 # Dossiês de incidentes (dados de operação, gerados pelo monitor)
 dossie/
+backup-*.sql.gz
