@@ -25,6 +25,7 @@ require_once dirname(__FILE__) . '/lib_dossie.php';
 const INSTANCIAS = [
     ['nome' => 'monitoramento.top',      'path' => '/monitoramentotop/'],
     ['nome' => 'nova.monitoramento.top', 'path' => '/monitoramentotop/nova/'],
+    ['nome' => 'IP direto :8082',        'path' => '/monitoramentotop/ip/'],
 ];
 
 function h(string $s): string { return htmlspecialchars($s, ENT_QUOTES, 'UTF-8'); }

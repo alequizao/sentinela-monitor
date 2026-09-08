@@ -1,0 +1,69 @@
+# Diretório de uso interno (cron) + painel de status público.
+#
+# Regra: NADA é servido, exceto o index.php (painel). O monitor.php contém a lógica
+# de alerta e dispara Direct; monitor.log, cron.out e estado.json expõem o histórico
+# de quedas. Só o index.php entra, e ele lê o estado.json pelo filesystem.
+#
+# Não use "Require all denied" no nível do diretório: isso bloquearia a própria URL
+# da pasta (https://.../monitoramentotop/) antes do DirectoryIndex agir, dando 403
+# mesmo com o index liberado. Por isso nega-se por EXTENSÃO e desliga-se a listagem.
+
+Options -Indexes
+DirectoryIndex index.php
+
+# Nega todo tipo de arquivo que exista (ou venha a existir) aqui.
+# dossie.php é o segundo (e único outro) arquivo servido: o prontuário dos incidentes.
+<FilesMatch "^(?!dossie\.php$).*\.(php|log|json|lock|out|conf|sql|bak|txt|md|gz|zip|tar)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Arquivos ocultos (.htaccess, .env, .git…) nunca são servidos.
+<FilesMatch "^\.">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# ÚNICA exceção: o painel de status.
+<Files "index.php">
+    <IfModule mod_authz_core.c>
+        Require all granted
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order deny,allow
+        Allow from all
+    </IfModule>
+</Files>
+
+# Service worker sempre revalidado: sem isso o navegador pode segurar a versão
+# antiga por até 24h e o push/reload forçado não chegaria a quem já acessou.
+# O vhost tem mod_expires ativo (max-age=14400), que sobrepõe um "Header set"
+# comum — daí o ExpiresActive Off aqui e o "always" no Header.
+<Files "sw.js">
+    <IfModule mod_expires.c>
+        ExpiresActive Off
+    </IfModule>
+    <IfModule mod_headers.c>
+        Header always set Cache-Control "no-cache, must-revalidate"
+        Header always unset Expires
+    </IfModule>
+</Files>
+<Files "index.php">
+    <IfModule mod_expires.c>
+        ExpiresActive Off
+    </IfModule>
+    <IfModule mod_headers.c>
+        Header always set Cache-Control "no-store, must-revalidate"
+        Header always unset Expires
+    </IfModule>
+</Files>

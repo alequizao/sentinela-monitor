@@ -48,6 +48,7 @@ const META_DISP  = 99.9;                            // meta de disponibilidade (
 const INSTANCIAS = [
     ['nome' => 'monitoramento.top',      'path' => '/monitoramentotop/'],
     ['nome' => 'nova.monitoramento.top', 'path' => '/monitoramentotop/nova/'],
+    ['nome' => 'IP direto :8082',        'path' => '/monitoramentotop/ip/'],
 ];
 
 /* ===== WEB PUSH =====
