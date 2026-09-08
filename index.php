@@ -40,7 +40,8 @@ if (!defined('PAINEL_PATH')) { define('PAINEL_PATH', '/monitoramentotop/'); }
 define('ESTADO_ARQ', INST_DIR . '/estado.json');
 define('HIST_DIR',   INST_DIR . '/historico');
 define('SUBS_ARQ',   INST_DIR . '/push_subs.json'); // inscrições Web Push (bloqueado na web)
-const AGENDA_DIR = '/www/wwwroot/publishdev.com.br/agendamentos';
+// Sistema de agendamentos (Direct + Web Push): VPS nova ou servidor publishdev.
+define('AGENDA_DIR', is_dir('/www/wwwroot/alequizao.com/agendamentos') ? '/www/wwwroot/alequizao.com/agendamentos' : '/www/wwwroot/publishdev.com.br/agendamentos');
 const META_DISP  = 99.9;                            // meta de disponibilidade (SLA interno)
 
 /* Instâncias monitoradas — vira o seletor no topo do painel. */

@@ -51,7 +51,7 @@ date_default_timezone_set('America/Maceio');
 if (!defined('ALVO_URL'))   { define('ALVO_URL', 'https://monitoramento.top/'); }
 if (!defined('ALVO_NOME'))  { define('ALVO_NOME', 'monitoramento.top'); }   // rótulo nos alertas
 if (!defined('INST_DIR'))   { define('INST_DIR', __DIR__); }                // estado/histórico/log
-if (!defined('PAINEL_URL')) { define('PAINEL_URL', 'https://publishdev.com.br/monitoramentotop/'); }
+if (!defined('PAINEL_URL')) { define('PAINEL_URL', is_dir('/www/wwwroot/alequizao.com/agendamentos') ? 'https://alequizao.com/monitoramentotop/' : 'https://publishdev.com.br/monitoramentotop/'); }
 /* Credenciais do Traccar ficam FORA do docroot, em arquivo 600 do root.
    Formato (ini):  usuario = xxx / senha = yyy  */
 if (!defined('CRED_ARQ'))   { define('CRED_ARQ', '/etc/monitor-traccar.conf'); }
@@ -72,7 +72,8 @@ const COOLDOWN_MIN   = 10;  // silêncio mínimo entre dois Direct quaisquer
 const FLAP_MAX       = 4;   // transições numa hora que caracterizam instabilidade
 const FLAP_SILENCIO_MIN = 120; // silêncio após declarar "instável"
 const MAX_AVISOS_DIA = 8;   // teto de segurança de Direct por dia
-const AGENDA_DIR   = '/www/wwwroot/publishdev.com.br/agendamentos';
+// Sistema de agendamentos (Direct + Web Push): VPS nova ou servidor publishdev.
+define('AGENDA_DIR', is_dir('/www/wwwroot/alequizao.com/agendamentos') ? '/www/wwwroot/alequizao.com/agendamentos' : '/www/wwwroot/publishdev.com.br/agendamentos');
 // Destinos do aviso no Direct (nome em dm_conversas).
 const DM_DESTINOS = ['alequizao', 'djalma_rapha'];
 
