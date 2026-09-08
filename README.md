@@ -173,3 +173,7 @@ Uso, cópia ou redistribuição somente com autorização.
 - Nota manual: `php monitor.php --nota INC-XXXX "texto"` na pasta da instância.
 - Backfill de incidentes antigos (idempotente): `php dossie_backfill.php [pasta]`.
 - Nova camada `tunel` (erro 1033) em `camada_da_falha`/`anotar_evidencia`; a sonda não a sobrescreve.
+
+## Produção (desde 2026-09-07)
+
+Roda na VPS nova em `https://alequizao.com/monitoramentotop/` (pasta `/www/wwwroot/alequizao.com/monitoramentotop`, cron `/etc/cron.d/sentinela`). Este diretório no publishdev é a cópia de desenvolvimento/repositório.
