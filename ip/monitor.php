@@ -1,5 +1,9 @@
 <?php
 declare(strict_types=1);
+/*
+ * Sentinela — monitor do Traccar · Desenvolvido por Alequizao <alequizao.dev@gmail.com>
+ * https://github.com/alequizao · © 2026 Alequizao. Todos os direitos reservados.
+ */
 /**
  * Instância "ip" do Sentinela — Traccar da VPS nova DIRETO pelo IP (porta 8082),
  * sem passar pela Cloudflare. Separa "o servidor caiu" de "o domínio/túnel caiu".

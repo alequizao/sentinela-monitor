@@ -1,6 +1,10 @@
 <?php
 declare(strict_types=1);
 
+/*
+ * Sentinela — monitor do Traccar · Desenvolvido por Alequizao <alequizao.dev@gmail.com>
+ * https://github.com/alequizao · © 2026 Alequizao. Todos os direitos reservados.
+ */
 /**
  * Instância "nova" do Sentinela — Traccar novo (VPS 179.199.136.173).
  * Wrapper fino: define o alvo e reaproveita TODO o monitor da instância

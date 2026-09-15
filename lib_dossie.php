@@ -1,6 +1,10 @@
 <?php
 declare(strict_types=1);
 
+/*
+ * Sentinela — monitor do Traccar · Desenvolvido por Alequizao <alequizao.dev@gmail.com>
+ * https://github.com/alequizao · © 2026 Alequizao. Todos os direitos reservados.
+ */
 /**
  * Dossiê de incidentes do Sentinela
  * ---------------------------------

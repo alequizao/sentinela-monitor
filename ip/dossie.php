@@ -1,5 +1,9 @@
 <?php
 declare(strict_types=1);
+/*
+ * Sentinela — monitor do Traccar · Desenvolvido por Alequizao <alequizao.dev@gmail.com>
+ * https://github.com/alequizao · © 2026 Alequizao. Todos os direitos reservados.
+ */
 /** Dossiê da instância "ip". */
 define('ALVO_NOME',   '179.199.136.173:8082 (IP direto)');
 define('ALVO_URL',    'http://179.199.136.173:8082/');

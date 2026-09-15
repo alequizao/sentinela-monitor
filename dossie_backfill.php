@@ -1,5 +1,9 @@
 <?php
 declare(strict_types=1);
+/*
+ * Sentinela — monitor do Traccar · Desenvolvido por Alequizao <alequizao.dev@gmail.com>
+ * https://github.com/alequizao · © 2026 Alequizao. Todos os direitos reservados.
+ */
 /* Cria dossiês para incidentes já registrados (estado.json de hoje + historico/).
  * Uso: php dossie_backfill.php [pasta-da-instancia]  — idempotente. */
 date_default_timezone_set('America/Maceio');

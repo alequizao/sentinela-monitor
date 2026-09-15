@@ -1,3 +1,7 @@
+/*
+ * Sentinela — monitor do Traccar · Desenvolvido por Alequizao <alequizao.dev@gmail.com>
+ * https://github.com/alequizao · © 2026 Alequizao. Todos os direitos reservados.
+ */
 /* Service worker do painel Sentinela — recebe Web Push e abre o painel no clique.
    Escopo: /monitoramentotop/ (o arquivo mora na própria pasta). */
 
